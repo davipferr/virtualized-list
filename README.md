@@ -86,8 +86,10 @@ reaches row #838,847, not #999,999.
 The fix uses two coordinate spaces:
 
 - **virtual**: the real layout, `totalSize` px tall.
-- **dom**: a spacer `min(totalSize, cap)` px tall. The cap is detected at runtime by asking for a
-  1e9 px element and reading back the clamped height, minus a 5% margin.
+- **dom**: a spacer `min(totalSize, cap)` px tall. The cap is detected at runtime by
+  binary-searching for the largest height that lays out at the requested size, minus a 5% margin.
+  A single "ask for 1e9px" probe isn't enough: Chrome clamps oversized heights, but Firefox drops
+  them and lays the element out at 0px.
 
 Only the **scroll position** is scaled. Rows are never scaled: a row is placed at
 `domScrollTop + (start − offset)`, so everything on screen keeps exact pixel spacing.
