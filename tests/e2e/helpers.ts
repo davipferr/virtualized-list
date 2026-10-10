@@ -32,7 +32,11 @@ export interface RowRect {
   vpHeight: number
 }
 
-/** Rows currently intersecting the viewport, with viewport-relative rects. */
+/**
+ * Rows currently intersecting the viewport, with viewport-relative rects.
+ * Slivers under 1px don't count: near ~15M px Firefox's layout is only sub-pixel accurate,
+ * so a neighbour can peek in by a fraction of a pixel.
+ */
 export async function visibleRows(page: Page): Promise<RowRect[]> {
   return page.evaluate(() => {
     const el = window.__demo!.scrollEl
@@ -43,7 +47,7 @@ export async function visibleRows(page: Page): Promise<RowRect[]> {
         const b = r.getBoundingClientRect()
         return { index: Number(r.dataset.index), top: b.top - top, bottom: b.bottom - top, vpHeight: el.clientHeight }
       })
-      .filter((r) => r.bottom > 0 && r.top < r.vpHeight)
+      .filter((r) => r.bottom > 1 && r.top < r.vpHeight - 1)
       .sort((a, b) => a.index - b.index)
   })
 }
@@ -56,8 +60,8 @@ export async function expectContiguous(page: Page): Promise<RowRect[]> {
     expect(rows[k].index).toBe(rows[k - 1].index + 1)
     expect(Math.abs(rows[k].top - rows[k - 1].bottom)).toBeLessThan(1.01)
   }
-  expect(rows[0].top).toBeLessThanOrEqual(0.5)
+  expect(rows[0].top).toBeLessThanOrEqual(1)
   const last = rows[rows.length - 1]
-  if (last.index !== 999_999) expect(last.bottom).toBeGreaterThanOrEqual(last.vpHeight - 0.5)
+  if (last.index !== 999_999) expect(last.bottom).toBeGreaterThanOrEqual(last.vpHeight - 1)
   return rows
 }

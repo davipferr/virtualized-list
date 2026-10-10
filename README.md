@@ -20,9 +20,37 @@ npm install
 npx playwright install chromium firefox
 npm run dev          # http://localhost:5173/?impl=ours  (or ?impl=tanstack, &count=…)
 npm test             # unit tests (Vitest)
-npm run test:e2e     # Playwright, Chromium + Firefox, against the production build
+npm run test:e2e     # Playwright (Chromium) against the production build
+npm run test:e2e:firefox  # same suite in Firefox
+npm run test:e2e:all #  runs both Chromium and Firefox
 npm run bench        # benchmark vs TanStack Virtual -> bench-results/
 ```
+
+### Troubleshooting
+
+**`npx playwright install` fails with `SELF_SIGNED_CERT_IN_CHAIN`.** Something between you and the
+download server (antivirus HTTPS scanning, a corporate proxy) is re-signing HTTPS traffic with its
+own certificate. That certificate is trusted by Windows but not by Node, which only uses its bundled
+CA list. Tell Node to also trust the operating system's certificate store:
+
+```powershell
+# PowerShell, current terminal only
+$env:NODE_USE_SYSTEM_CA=1; npx playwright install chromium
+```
+
+```bash
+# bash / macOS / Linux
+NODE_USE_SYSTEM_CA=1 npx playwright install chromium
+```
+
+To make it permanent on Windows, run `setx NODE_USE_SYSTEM_CA 1` and open a new terminal.
+`NODE_USE_SYSTEM_CA` needs Node ≥ 22.15 / 23.8. Avoid `NODE_TLS_REJECT_UNAUTHORIZED=0`: it turns
+off certificate checks entirely instead of trusting your system's certificates.
+
+**Firefox fails with `spawn UNKNOWN`, or Windows says "side-by-side configuration is incorrect"
+(`mozglue`).** Windows can't load Playwright's Firefox build on this machine. This is usually a
+broken Microsoft Visual C++ Redistributable: reinstall the x64 one and reboot. Chromium tests
+(`npm run test:e2e`) don't need Firefox.
 
 ## Design
 
@@ -39,11 +67,11 @@ snapshot with `useSyncExternalStore`, so a Vue, Svelte or Solid adapter would be
 Rows start at an estimate (40px). `ResizeObserver` reports each rendered row's real
 `borderBoxSize`, and the size goes into a Fenwick tree:
 
-| operation | Fenwick | prefix-sum array |
-|---|---|---|
-| update one row's size | O(log n) | O(n) |
-| offset of row i | O(log n) | O(1) |
-| first row at pixel y | O(log n) (binary lifting) | O(log n) |
+| operation             | Fenwick                   | prefix-sum array |
+| --------------------- | ------------------------- | ---------------- |
+| update one row's size | O(log n)                  | O(n)             |
+| offset of row i       | O(log n)                  | O(1)             |
+| first row at pixel y  | O(log n) (binary lifting) | O(log n)         |
 
 At 1M rows, every measurement into a prefix-sum array rewrites up to 1M entries. That cost shows up
 directly in the TanStack trace below: its time goes to rebuilding measurements, not to rendering.
@@ -118,23 +146,23 @@ production build in headless Chromium. scrollTop is advanced by a fixed amount o
 throttled through CDP to simulate slower machines. Main-thread time is the union of trace-event
 intervals, so nested events aren't double-counted.
 
-| impl | scenario | CPU | fps | p95 frame | dropped | main thread / frame | script / frame |
-|---|---|---|---|---|---|---|---|
-| **ours** | steady scroll from top (60px/frame) | 1x | **60.0** | 16.7ms | 0% | **2.25ms** | 1.34ms |
-| tanstack | steady scroll from top (60px/frame) | 1x | 60.0 | 16.7ms | 0% | 10.64ms | 10.12ms |
-| **ours** | steady scroll from top (60px/frame) | 4x | **60.0** | 16.7ms | 0% | **7.60ms** | 4.62ms |
-| tanstack | steady scroll from top (60px/frame) | 4x | 15.9 | 100ms | 85% | 62.89ms | 60.09ms |
-| **ours** | fast fling mid-list (400px/frame) | 1x | **60.0** | 16.8ms | 0% | **2.77ms** | 1.84ms |
-| tanstack | fast fling mid-list (400px/frame) | 1x | 60.0 | 16.8ms | 0% | 8.60ms | 7.96ms |
-| **ours** | fast fling mid-list (400px/frame) | 4x | **60.0** | 16.7ms | 0% | **9.94ms** | 6.52ms |
-| tanstack | fast fling mid-list (400px/frame) | 4x | 21.6 | 50.1ms | 98% | 46.29ms | 43.49ms |
+| impl     | scenario                            | CPU | fps      | p95 frame | dropped | main thread / frame | script / frame |
+| -------- | ----------------------------------- | --- | -------- | --------- | ------- | ------------------- | -------------- |
+| **ours** | steady scroll from top (60px/frame) | 1x  | **60.0** | 16.7ms    | 0%      | **2.25ms**          | 1.34ms         |
+| tanstack | steady scroll from top (60px/frame) | 1x  | 60.0     | 16.7ms    | 0%      | 10.64ms             | 10.12ms        |
+| **ours** | steady scroll from top (60px/frame) | 4x  | **60.0** | 16.7ms    | 0%      | **7.60ms**          | 4.62ms         |
+| tanstack | steady scroll from top (60px/frame) | 4x  | 15.9     | 100ms     | 85%     | 62.89ms             | 60.09ms        |
+| **ours** | fast fling mid-list (400px/frame)   | 1x  | **60.0** | 16.8ms    | 0%      | **2.77ms**          | 1.84ms         |
+| tanstack | fast fling mid-list (400px/frame)   | 1x  | 60.0     | 16.8ms    | 0%      | 8.60ms              | 7.96ms         |
+| **ours** | fast fling mid-list (400px/frame)   | 4x  | **60.0** | 16.7ms    | 0%      | **9.94ms**          | 6.52ms         |
+| tanstack | fast fling mid-list (400px/frame)   | 4x  | 21.6     | 50.1ms    | 98%     | 46.29ms             | 43.49ms        |
 
 Ours holds 60fps with headroom even on a 4×-throttled CPU (≤10ms of a 16.7ms budget). TanStack's
 script time is dominated by recomputing measurements across 1M items whenever a row is measured,
 the O(n) prefix-sum cost. The bench asserts ≥55fps and <5% dropped frames for ours at 1× CPU.
 
 Each run writes a trace to `bench-results/trace-<impl>-<scenario>-<cpu>.json`. Load it in Chrome
-DevTools → Performance → *Load profile…* to inspect frames, or record your own session there on
+DevTools → Performance → _Load profile…_ to inspect frames, or record your own session there on
 `npm run dev`.
 
 Results are from one machine (Windows 11, headless Chromium) and will vary on yours. Re-run
